@@ -1,20 +1,16 @@
 import sqlite3
 import os
+import bcrypt
 
-# Always resolve path relative to THIS file — works from any working directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 db_path  = os.path.join(BASE_DIR, "database.db")
 
-# Remove old DB so setup is always idempotent
 if os.path.exists(db_path):
     os.remove(db_path)
 
 con = sqlite3.connect(db_path)
 cur = con.cursor()
 
-# ── Create Tables ──────────────────────────────────────────────────────────────
-
-# VULNERABILITY: No password hashing — passwords stored in plaintext
 cur.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,8 +41,8 @@ cur.execute('''
     )
 ''')
 
-# ── Seed Users ─────────────────────────────────────────────────────────────────
-users = [
+# FIX: Seed users with bcrypt-hashed passwords
+raw_users = [
     ('admin',      'password123',  '01/01/1990', 'Site administrator. Here to keep things running.', 'admin'),
     ('GamerGirl',  'qwerty',       '15/05/2002', 'Casual gamer | Indie titles and retro consoles.', 'user'),
     ('TechNerd42', 'letmein',      '22/08/1998', 'Software dev by day, CTF player by night. Python fan.', 'user'),
@@ -55,16 +51,20 @@ users = [
     ('x0_h4ck3r',  'supersecret!', '14/02/1999', "Security researcher. I find bugs so you don't have to.", 'user'),
 ]
 
+users = []
+for (uname, pwd, dob, bio, role) in raw_users:
+    hashed = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    users.append((uname, hashed, dob, bio, role))
+
 cur.executemany(
     "INSERT INTO users (username, password, dateOfBirth, bio, role) VALUES (?,?,?,?,?)",
     users
 )
 
-# ── Seed Posts ─────────────────────────────────────────────────────────────────
 posts = [
-    ('admin',      'Welcome to the Unsecure Social PWA! This platform is for educational use only. Explore, post, and see what you can find.'),
+    ('admin',      'Welcome to the Unsecure Social PWA! This platform is for educational use only.'),
     ('GamerGirl',  "Can anyone tell me how to patch an XSS vulnerability? My friend's site keeps getting hit."),
-    ('TechNerd42', 'Just finished a 48-hour CTF. Sleep is overrated. Flag captured: 3 out of 10 challenges. Still proud.'),
+    ('TechNerd42', 'Just finished a 48-hour CTF. Sleep is overrated. Flag captured: 3 out of 10 challenges.'),
     ('CryptoKing', 'HODL. That is all.'),
     ('Sarah_J',    'Posted new photos to my portfolio! Let me know what you think. Link in bio.'),
     ('x0_h4ck3r',  'Friendly reminder: always sanitise your inputs. SQL injection is not dead. Not even close.'),
@@ -75,10 +75,8 @@ posts = [
     ('x0_h4ck3r',  'The service worker on this site caches everything including the feed page. Wonder what you could do with that.'),
     ('CryptoKing', 'My DMs are open if anyone wants to talk trading strategies. Not financial advice obviously.'),
 ]
-
 cur.executemany("INSERT INTO posts (author, content) VALUES (?,?)", posts)
 
-# ── Seed Messages ──────────────────────────────────────────────────────────────
 messages = [
     ('admin',      'GamerGirl',  'Hey! Welcome to the platform. Let us know if you have any issues logging in.'),
     ('GamerGirl',  'admin',      'Thanks! Quick question — is there a way to change my password? I used qwerty and now I regret it.'),
@@ -88,20 +86,16 @@ messages = [
     ('CryptoKing', 'Sarah_J',   'Hey your portfolio link in your bio is broken btw.'),
     ('Sarah_J',    'CryptoKing','Ugh, thanks for spotting that. Fixed now hopefully!'),
 ]
-
 cur.executemany("INSERT INTO messages (sender, recipient, body) VALUES (?,?,?)", messages)
 
 con.commit()
 con.close()
 
 print("=" * 55)
-print("  database.db generated successfully!")
+print("  database.db generated successfully! (V1 — bcrypt)")
 print("=" * 55)
-print("  Users seeded:")
-for u in users:
+for u in raw_users:
     print(f"    [{u[4]:5s}]  {u[0]:12s}  password: {u[1]}")
 print(f"  Posts seeded:     {len(posts)}")
 print(f"  Messages seeded:  {len(messages)}")
-print("=" * 55)
-print("  Run:  python main.py")
 print("=" * 55)

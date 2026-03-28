@@ -2,19 +2,17 @@ import os
 import sys
 import sqlite3
 import subprocess
-from flask import Flask, render_template, request, redirect
+import secrets
+from flask import Flask, render_template, request, redirect, session
 from flask_cors import CORS
 import user_management as db
 
-# ── Auto-bootstrap the database on every startup ──────────────────────────────
-# This ensures students never see "no such table" even if setup_db.py
-# was never manually run, or if the .db file is missing / corrupted.
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 DB_PATH      = os.path.join(BASE_DIR, "database_files", "database.db")
 SETUP_SCRIPT = os.path.join(BASE_DIR, "database_files", "setup_db.py")
 
+
 def _tables_exist():
-    """Return True if the required tables are all present."""
     try:
         con = sqlite3.connect(DB_PATH)
         cur = con.cursor()
@@ -25,6 +23,7 @@ def _tables_exist():
         return {"users", "posts", "messages"}.issubset(tables)
     except Exception:
         return False
+
 
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, "database_files"), exist_ok=True)
@@ -40,17 +39,18 @@ def init_db():
     else:
         print("[SocialPWA] Database already exists — skipping setup.")
 
-init_db()
 
-# ─────────────────────────────────────────────────────────────────────────────
+init_db()
 
 app = Flask(__name__)
 
-# VULNERABILITY: Wildcard CORS — allows ANY origin to make credentialed requests
+# STILL VULNERABLE: Wildcard CORS
 CORS(app)
 
-# VULNERABILITY: Hardcoded secret key — session cookies can be forged
-app.secret_key = "supersecretkey123"
+# FIX: Secret key loaded from environment variable, falls back to a random
+# generated key per-process (not persistent across restarts, but not hardcoded).
+# In production, set the SECRET_KEY environment variable.
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 
 # ── Home / Login ──────────────────────────────────────────────────────────────
@@ -58,11 +58,11 @@ app.secret_key = "supersecretkey123"
 @app.route("/", methods=["POST", "GET"])
 @app.route("/index.html", methods=["POST", "GET"])
 def home():
-    # VULNERABILITY: Open Redirect — blindly follows 'url' query parameter
+    # STILL VULNERABLE: Open Redirect
     if request.method == "GET" and request.args.get("url"):
         return redirect(request.args.get("url"), code=302)
 
-    # VULNERABILITY: Reflected XSS — 'msg' rendered with |safe in template
+    # STILL VULNERABLE: Reflected XSS via |safe in template
     if request.method == "GET":
         msg = request.args.get("msg", "")
         return render_template("index.html", msg=msg)
@@ -90,8 +90,8 @@ def signup():
         password = request.form["password"]
         DoB      = request.form["dob"]
         bio      = request.form.get("bio", "")
-        # VULNERABILITY: No duplicate username check
-        # VULNERABILITY: No input validation or password strength enforcement
+        # STILL VULNERABLE: No duplicate username check
+        # STILL VULNERABLE: No input validation
         db.insertUser(username, password, DoB, bio)
         return render_template("index.html", msg="Account created! Please log in.")
     else:
@@ -107,7 +107,7 @@ def feed():
 
     if request.method == "POST":
         post_content = request.form["content"]
-        # VULNERABILITY: IDOR — username from hidden form field, can be tampered with
+        # STILL VULNERABLE: IDOR — username from hidden form field
         username = request.form.get("username", "Anonymous")
         db.insertPost(username, post_content)
         posts = db.getPosts()
@@ -121,8 +121,7 @@ def feed():
 
 @app.route("/profile")
 def profile():
-    # VULNERABILITY: No authentication check — any visitor can read any profile
-    # VULNERABILITY: SQL Injection via 'user' parameter in getUserProfile()
+    # STILL VULNERABLE: No authentication check
     if request.args.get("url"):
         return redirect(request.args.get("url"), code=302)
     username = request.args.get("user", "")
@@ -134,7 +133,7 @@ def profile():
 
 @app.route("/messages", methods=["POST", "GET"])
 def messages():
-    # VULNERABILITY: No authentication — change ?user= to read anyone's inbox
+    # STILL VULNERABLE: No authentication
     if request.method == "POST":
         sender    = request.form.get("sender", "Anonymous")
         recipient = request.form.get("recipient", "")
