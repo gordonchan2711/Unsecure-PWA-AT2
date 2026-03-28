@@ -11,7 +11,6 @@ BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 DB_PATH      = os.path.join(BASE_DIR, "database_files", "database.db")
 SETUP_SCRIPT = os.path.join(BASE_DIR, "database_files", "setup_db.py")
 
-# FIX: Restrict CORS to same origin / trusted origins only
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").split(",")
 
 
@@ -47,28 +46,29 @@ init_db()
 
 app = Flask(__name__)
 
-# FIX: CORS restricted — only allow same-origin or explicitly listed origins
+# Carried from V2: restricted CORS
 if ALLOWED_ORIGINS and ALLOWED_ORIGINS != [""]:
     CORS(app, origins=ALLOWED_ORIGINS)
 else:
-    # No external origins permitted by default
     CORS(app, origins=[])
 
-# FIX: Secret key from environment variable
+# Carried from V1: env-based secret key
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
-# FIX: Allowed redirect targets — open redirect is fixed
 SAFE_REDIRECT_HOSTS = {"localhost", "127.0.0.1"}
 
 
 def _safe_redirect(url):
-    """FIX: Only allow redirects to same-host URLs, block external redirects."""
     from urllib.parse import urlparse
     parsed = urlparse(url)
-    # Relative URLs are fine; absolute URLs must match a safe host
     if not parsed.netloc or parsed.netloc.split(":")[0] in SAFE_REDIRECT_HOSTS:
         return redirect(url, code=302)
-    return None  # Blocked
+    return None
+
+
+def _require_login():
+    """FIX: Returns the logged-in username or None."""
+    return session.get("username")
 
 
 # ── Home / Login ──────────────────────────────────────────────────────────────
@@ -76,7 +76,6 @@ def _safe_redirect(url):
 @app.route("/", methods=["POST", "GET"])
 @app.route("/index.html", methods=["POST", "GET"])
 def home():
-    # FIX: Open redirect — validate URL before redirecting
     if request.method == "GET" and request.args.get("url"):
         safe = _safe_redirect(request.args.get("url"))
         if safe:
@@ -91,7 +90,6 @@ def home():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        # FIX: Basic input validation
         if not username or not password:
             return render_template("index.html", msg="Username and password are required.")
         if len(username) > 50 or len(password) > 200:
@@ -99,10 +97,20 @@ def home():
 
         isLoggedIn = db.retrieveUsers(username, password)
         if isLoggedIn:
+            # FIX: Store username in server-side session
+            session["username"] = username
             posts = db.getPosts()
-            return render_template("feed.html", username=username, state=isLoggedIn, posts=posts)
+            return render_template("feed.html", username=username, state=True, posts=posts)
         else:
             return render_template("index.html", msg="Invalid credentials. Please try again.")
+
+
+# ── Logout ────────────────────────────────────────────────────────────────────
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
 
 
 # ── Sign Up ───────────────────────────────────────────────────────────────────
@@ -121,7 +129,6 @@ def signup():
         DoB      = request.form.get("dob", "").strip()
         bio      = request.form.get("bio", "").strip()
 
-        # FIX: Input validation
         if not username or not password or not DoB:
             return render_template("signup.html", msg="All fields are required.")
         if len(username) < 3 or len(username) > 30:
@@ -130,8 +137,6 @@ def signup():
             return render_template("signup.html", msg="Password must be at least 8 characters.")
         if len(bio) > 200:
             return render_template("signup.html", msg="Bio must be under 200 characters.")
-
-        # FIX: Duplicate username check
         if db.getUserProfile(username) is not None:
             return render_template("signup.html", msg="Username already taken. Please choose another.")
 
@@ -150,40 +155,47 @@ def feed():
         if safe:
             return safe
 
+    # FIX: IDOR — get username from session, not from form field
+    logged_in_user = _require_login()
+    if not logged_in_user:
+        return redirect("/?msg=Please log in to access the feed.")
+
     if request.method == "POST":
         post_content = request.form.get("content", "").strip()
-        # STILL VULNERABLE: IDOR — username from hidden form field
-        username = request.form.get("username", "Anonymous")
 
-        # FIX: Validate post content
         if not post_content:
             posts = db.getPosts()
-            return render_template("feed.html", username=username, state=True, posts=posts,
+            return render_template("feed.html", username=logged_in_user, state=True, posts=posts,
                                    msg="Post content cannot be empty.")
         if len(post_content) > 500:
             posts = db.getPosts()
-            return render_template("feed.html", username=username, state=True, posts=posts,
+            return render_template("feed.html", username=logged_in_user, state=True, posts=posts,
                                    msg="Post too long (max 500 characters).")
 
-        db.insertPost(username, post_content)
+        # FIX: Use session username — not the hidden form field
+        db.insertPost(logged_in_user, post_content)
         posts = db.getPosts()
-        return render_template("feed.html", username=username, state=True, posts=posts)
+        return render_template("feed.html", username=logged_in_user, state=True, posts=posts)
     else:
         posts = db.getPosts()
-        return render_template("feed.html", username="Guest", state=True, posts=posts)
+        return render_template("feed.html", username=logged_in_user, state=True, posts=posts)
 
 
 # ── User Profile ──────────────────────────────────────────────────────────────
 
 @app.route("/profile")
 def profile():
-    # STILL VULNERABLE: No authentication check
+    # FIX: Authentication required
+    logged_in_user = _require_login()
+    if not logged_in_user:
+        return redirect("/?msg=Please log in to view profiles.")
+
     if request.args.get("url"):
         safe = _safe_redirect(request.args.get("url"))
         if safe:
             return safe
+
     username = request.args.get("user", "").strip()
-    # FIX: Input validation on username parameter
     if not username or len(username) > 50:
         return render_template("profile.html", profile=None, username="")
     profile_data = db.getUserProfile(username)
@@ -194,29 +206,33 @@ def profile():
 
 @app.route("/messages", methods=["POST", "GET"])
 def messages():
-    # STILL VULNERABLE: No authentication
+    # FIX: Authentication required — users can only see their own inbox
+    logged_in_user = _require_login()
+    if not logged_in_user:
+        return redirect("/?msg=Please log in to view messages.")
+
     if request.method == "POST":
-        sender    = request.form.get("sender", "Anonymous").strip()
+        # FIX: sender is always the logged-in user — not from hidden field
+        sender    = logged_in_user
         recipient = request.form.get("recipient", "").strip()
         body      = request.form.get("body", "").strip()
 
-        # FIX: Input validation
         if not recipient or not body:
-            msgs = db.getMessages(sender)
-            return render_template("messages.html", messages=msgs, username=sender,
+            msgs = db.getMessages(logged_in_user)
+            return render_template("messages.html", messages=msgs, username=logged_in_user,
                                    recipient=recipient, msg="Recipient and message body are required.")
         if len(body) > 1000:
-            msgs = db.getMessages(sender)
-            return render_template("messages.html", messages=msgs, username=sender,
+            msgs = db.getMessages(logged_in_user)
+            return render_template("messages.html", messages=msgs, username=logged_in_user,
                                    recipient=recipient, msg="Message too long (max 1000 characters).")
 
         db.sendMessage(sender, recipient, body)
-        msgs = db.getMessages(recipient)
-        return render_template("messages.html", messages=msgs, username=sender, recipient=recipient)
+        msgs = db.getMessages(logged_in_user)
+        return render_template("messages.html", messages=msgs, username=logged_in_user, recipient=recipient)
     else:
-        username = request.args.get("user", "Guest").strip()
-        msgs = db.getMessages(username)
-        return render_template("messages.html", messages=msgs, username=username, recipient=username)
+        # FIX: Always show the logged-in user's inbox — ignore ?user= param
+        msgs = db.getMessages(logged_in_user)
+        return render_template("messages.html", messages=msgs, username=logged_in_user, recipient=logged_in_user)
 
 
 # ── Success Page ──────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
       <div class="sidebar-links">
         <a href="/profile?user={{ username }}">&#128100; My Profile</a>
         <a href="/messages?user={{ username }}">&#128140; Messages</a>
-        <a href="/">&#128682; Log Out</a>
+        <a href="/logout"><a href="/">&#128682; Log Out</a>#128682; Log Out</a>
       </div>
     </div>
 
@@ -43,7 +43,7 @@
     -->
     <div class="compose-card">
       <form action="/feed.html" method="POST">
-        <input type="hidden" name="username" value="{{ username }}" />
+        
         <div class="form-group" style="margin-bottom:0.6rem;">
           <textarea
             name="content"

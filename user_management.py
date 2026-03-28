@@ -1,32 +1,33 @@
 import sqlite3 as sql
-import time
 import os
 import bcrypt
+import time
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  user_management.py  —  Version 1
+#  user_management.py  —  Version 3
 #
-#  FIXED:
-#    1. SQL Injection       — parameterized queries throughout
-#    2. Plaintext passwords — bcrypt hashing applied
-#    3. Rate limiting       — in-memory lockout after 5 failed attempts
+#  FIXED (on top of V1 + V2):
+#    - Timing side-channel: constant-time comparison regardless of username existence
 #
-#  STILL VULNERABLE (intentional):
-#    - Timing side-channel
-#    - No input validation
-#    - IDOR (username from hidden field)
-#    - No duplicate username check
-#    - No auth checks on profile/messages
+#  STILL VULNERABLE (intentional — issues #17–20):
+#    - Stored XSS via post content (|safe in feed.html)
+#    - IDOR on message sender (hidden field — kept in template)
+#    - SQL Injection in getUserProfile()
+#    - SQL Injection in getMessages() and sendMessage()
 # ─────────────────────────────────────────────────────────────────────────────
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH  = os.path.join(BASE_DIR, "database_files", "database.db")
 LOG_PATH = os.path.join(BASE_DIR, "visitor_log.txt")
 
-# ── Rate Limiting ─────────────────────────────────────────────────────────────
+# ── Rate Limiting (carried from V1) ──────────────────────────────────────────
 _login_attempts = {}
 MAX_ATTEMPTS   = 5
-LOCKOUT_WINDOW = 60  # seconds
+LOCKOUT_WINDOW = 60
+
+# Dummy hash used for constant-time comparison when username doesn't exist
+# FIX: prevents timing side-channel — bcrypt always runs even for unknown users
+_DUMMY_HASH = bcrypt.hashpw(b"dummy_password_for_timing", bcrypt.gensalt()).decode("utf-8")
 
 
 def _is_locked_out(username):
@@ -41,7 +42,7 @@ def _record_attempt(username):
 
 
 def insertUser(username, password, DoB, bio=""):
-    """FIX: bcrypt hash. STILL VULNERABLE: no duplicate check."""
+    """FIX: bcrypt hash. Duplicate check handled in main.py."""
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     con = sql.connect(DB_PATH)
     cur = con.cursor()
@@ -54,7 +55,10 @@ def insertUser(username, password, DoB, bio=""):
 
 
 def retrieveUsers(username, password):
-    """FIX: parameterized queries, bcrypt check, rate limiting."""
+    """
+    FIX: Constant-time login — bcrypt.checkpw always runs regardless of whether
+    the username exists, eliminating the timing side-channel.
+    """
     if _is_locked_out(username):
         return False
 
@@ -65,6 +69,8 @@ def retrieveUsers(username, password):
     con.close()
 
     if user_row is None:
+        # FIX: Still run bcrypt against dummy hash — same timing as a real check
+        bcrypt.checkpw(password.encode("utf-8"), _DUMMY_HASH.encode("utf-8"))
         _record_attempt(username)
         return False
 
@@ -92,7 +98,7 @@ def retrieveUsers(username, password):
 
 
 def insertPost(author, content):
-    """FIX: parameterized query. STILL VULNERABLE: IDOR on author."""
+    """Parameterized query. Author now comes from session (fixed in main.py)."""
     con = sql.connect(DB_PATH)
     cur = con.cursor()
     cur.execute("INSERT INTO posts (author, content) VALUES (?,?)", (author, content))
@@ -101,6 +107,7 @@ def insertPost(author, content):
 
 
 def getPosts():
+    """NOTE: Content still rendered with |safe in feed.html — Stored XSS (#17) remains."""
     con = sql.connect(DB_PATH)
     cur = con.cursor()
     data = cur.execute("SELECT * FROM posts ORDER BY id DESC").fetchall()
@@ -109,39 +116,37 @@ def getPosts():
 
 
 def getUserProfile(username):
-    """FIX: parameterized query. STILL VULNERABLE: no auth check."""
+    """
+    STILL VULNERABLE (#19): SQL Injection via f-string — intentionally left for exercise.
+    """
     con = sql.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute(
-        "SELECT id, username, dateOfBirth, bio, role FROM users WHERE username = ?",
-        (username,)
-    )
+    cur.execute(f"SELECT id, username, dateOfBirth, bio, role FROM users WHERE username = '{username}'")
     row = cur.fetchone()
     con.close()
     return row
 
 
 def getMessages(username):
-    """FIX: parameterized query. STILL VULNERABLE: no auth check."""
+    """
+    STILL VULNERABLE (#20): SQL Injection via f-string — intentionally left for exercise.
+    """
     con = sql.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute(
-        "SELECT * FROM messages WHERE recipient = ? ORDER BY id DESC",
-        (username,)
-    )
+    cur.execute(f"SELECT * FROM messages WHERE recipient = '{username}' ORDER BY id DESC")
     rows = cur.fetchall()
     con.close()
     return rows
 
 
 def sendMessage(sender, recipient, body):
-    """FIX: parameterized query. STILL VULNERABLE: sender spoofable."""
+    """
+    STILL VULNERABLE (#20): SQL Injection via f-string — intentionally left for exercise.
+    STILL VULNERABLE (#18): sender from hidden field — intentionally left for exercise.
+    """
     con = sql.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute(
-        "INSERT INTO messages (sender, recipient, body) VALUES (?,?,?)",
-        (sender, recipient, body)
-    )
+    cur.execute(f"INSERT INTO messages (sender, recipient, body) VALUES ('{sender}', '{recipient}', '{body}')")
     con.commit()
     con.close()
 
