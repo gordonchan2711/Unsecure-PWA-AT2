@@ -27,7 +27,7 @@
         VULNERABILITY: No check that 'recipient' exists in the database.
       -->
       <form action="/messages" method="POST">
-        <input type="hidden" name="sender" value="{{ username }}" />
+        
         <div class="form-group">
           <label for="recipient">To</label>
           <input
@@ -79,7 +79,7 @@
           An attacker can send a message containing <script>alert(document.cookie)</script>
           and it will execute when the recipient opens their inbox.
         -->
-        <div class="msg-body">{{ msg[3] | safe }}</div>
+        <div class="msg-body">{{ msg[3] }}</div>
       </div>
       {% endfor %}
     {% else %}

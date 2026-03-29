@@ -3,7 +3,7 @@ import sys
 import sqlite3
 import subprocess
 import secrets
-from flask import Flask, render_template, request, redirect, session, abort
+from flask import Flask, render_template, request, redirect, session
 from flask_cors import CORS
 import user_management as db
 
@@ -46,19 +46,21 @@ init_db()
 
 app = Flask(__name__)
 
-# Carried from V2: restricted CORS
+# FIX: CORS locked to allowed origins only
 if ALLOWED_ORIGINS and ALLOWED_ORIGINS != [""]:
     CORS(app, origins=ALLOWED_ORIGINS)
 else:
     CORS(app, origins=[])
 
-# Carried from V1: env-based secret key
+# FIX: secret key from environment — random fallback if not set
+# make sure to set SECRET_KEY in production, the random one doesn't survive restarts
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 SAFE_REDIRECT_HOSTS = {"localhost", "127.0.0.1"}
 
 
 def _safe_redirect(url):
+    # FIX: only allow redirects to relative paths or same host
     from urllib.parse import urlparse
     parsed = urlparse(url)
     if not parsed.netloc or parsed.netloc.split(":")[0] in SAFE_REDIRECT_HOSTS:
@@ -67,7 +69,6 @@ def _safe_redirect(url):
 
 
 def _require_login():
-    """FIX: Returns the logged-in username or None."""
     return session.get("username")
 
 
@@ -90,6 +91,7 @@ def home():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
+        # FIX: basic input validation before hitting the db
         if not username or not password:
             return render_template("index.html", msg="Username and password are required.")
         if len(username) > 50 or len(password) > 200:
@@ -97,7 +99,7 @@ def home():
 
         isLoggedIn = db.retrieveUsers(username, password)
         if isLoggedIn:
-            # FIX: Store username in server-side session
+            # FIX: store username in server-side session — not in a form field
             session["username"] = username
             posts = db.getPosts()
             return render_template("feed.html", username=username, state=True, posts=posts)
@@ -129,6 +131,7 @@ def signup():
         DoB      = request.form.get("dob", "").strip()
         bio      = request.form.get("bio", "").strip()
 
+        # FIX: server-side validation — client-side alone isn't enough
         if not username or not password or not DoB:
             return render_template("signup.html", msg="All fields are required.")
         if len(username) < 3 or len(username) > 30:
@@ -137,6 +140,8 @@ def signup():
             return render_template("signup.html", msg="Password must be at least 8 characters.")
         if len(bio) > 200:
             return render_template("signup.html", msg="Bio must be under 200 characters.")
+
+        # FIX: duplicate username check
         if db.getUserProfile(username) is not None:
             return render_template("signup.html", msg="Username already taken. Please choose another.")
 
@@ -155,7 +160,7 @@ def feed():
         if safe:
             return safe
 
-    # FIX: IDOR — get username from session, not from form field
+    # FIX: check session before showing the feed
     logged_in_user = _require_login()
     if not logged_in_user:
         return redirect("/?msg=Please log in to access the feed.")
@@ -172,7 +177,7 @@ def feed():
             return render_template("feed.html", username=logged_in_user, state=True, posts=posts,
                                    msg="Post too long (max 500 characters).")
 
-        # FIX: Use session username — not the hidden form field
+        # FIX: use session username as author — hidden field was too easy to tamper with
         db.insertPost(logged_in_user, post_content)
         posts = db.getPosts()
         return render_template("feed.html", username=logged_in_user, state=True, posts=posts)
@@ -185,7 +190,7 @@ def feed():
 
 @app.route("/profile")
 def profile():
-    # FIX: Authentication required
+    # FIX: require login — profile data has DoB and other PII
     logged_in_user = _require_login()
     if not logged_in_user:
         return redirect("/?msg=Please log in to view profiles.")
@@ -198,6 +203,7 @@ def profile():
     username = request.args.get("user", "").strip()
     if not username or len(username) > 50:
         return render_template("profile.html", profile=None, username="")
+
     profile_data = db.getUserProfile(username)
     return render_template("profile.html", profile=profile_data, username=username)
 
@@ -206,13 +212,13 @@ def profile():
 
 @app.route("/messages", methods=["POST", "GET"])
 def messages():
-    # FIX: Authentication required — users can only see their own inbox
+    # FIX: require login — inbox should only be visible to the owner
     logged_in_user = _require_login()
     if not logged_in_user:
         return redirect("/?msg=Please log in to view messages.")
 
     if request.method == "POST":
-        # FIX: sender is always the logged-in user — not from hidden field
+        # FIX: sender is always the logged-in user — not whatever the form says
         sender    = logged_in_user
         recipient = request.form.get("recipient", "").strip()
         body      = request.form.get("body", "").strip()
@@ -230,7 +236,7 @@ def messages():
         msgs = db.getMessages(logged_in_user)
         return render_template("messages.html", messages=msgs, username=logged_in_user, recipient=recipient)
     else:
-        # FIX: Always show the logged-in user's inbox — ignore ?user= param
+        # FIX: always show logged-in user's inbox — ignore ?user= param entirely
         msgs = db.getMessages(logged_in_user)
         return render_template("messages.html", messages=msgs, username=logged_in_user, recipient=logged_in_user)
 
